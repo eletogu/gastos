@@ -2,20 +2,26 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-import plotly.express as px
 import requests
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Finanzas Leo & Cata", page_icon="🇨🇴", layout="wide")
 
-# Presupuestos mensuales (Metas)
+# Estilos CSS personalizados para mejorar la apariencia del menú lateral
+st.markdown("""
+    <style>
+        [data-testid="stSidebarNav"] {display: none;}
+        .st-emotion-cache-16ids0d {font-size: 1.1rem; font-weight: bold;}
+    </style>
+""", unsafe_allow_html=True)
+
+# Configuración de Presupuestos y Categorías
 PRESUPUESTOS_FAMILIARES = {
     "Almuerzos de trabajo": 520000,
     "Almuerzos fines de semana": 1200000,
     "Mercado": 600000
 }
 
-# Categorías oficiales
 CATEGORIAS_GASTOS = [
     "Almuerzos de trabajo", "Almuerzos fines de semana", "Mercado", 
     "Transporte", "Servicios", "Ocio", "Salud", 
@@ -25,7 +31,6 @@ CATEGORIAS_GASTOS = [
 
 # --- 2. FUNCIONES DE APOYO ---
 def enviar_notificacion(mensaje):
-    """Envía alertas a Telegram"""
     try:
         token = st.secrets["telegram_token"]
         chat_id = st.secrets["telegram_chat_id"]
@@ -35,7 +40,6 @@ def enviar_notificacion(mensaje):
         pass
 
 def cargar_datos():
-    """Conecta con Google Sheets y limpia los datos"""
     conn = st.connection("gsheets", type=GSheetsConnection)
     data = conn.read(ttl="0")
     data.columns = data.columns.str.strip()
@@ -46,148 +50,154 @@ def cargar_datos():
     data['Monto'] = pd.to_numeric(data['Monto'], errors='coerce').fillna(0)
     return data
 
-# Carga inicial de datos
-df_v = cargar_datos()
-
-# --- 3. FORMULARIOS DE REGISTRO ---
-st.title("🏠 Finanzas Hogar & 🚗 Negocio Carro")
-
-col_reg1, col_reg2 = st.columns(2)
-
-with col_reg1:
-    with st.expander("➕ REGISTRAR MOVIMIENTO (Gasto/Ingreso/Préstamo)", expanded=False):
-        # DINÁMICO: La categoría va fuera del form para que los campos de gas aparezcan solos
-        cat_g = st.selectbox("Selecciona la Categoría", CATEGORIAS_GASTOS)
-        
-        with st.form("nuevo_gasto", clear_on_submit=True):
-            fecha_g = st.date_input("Fecha", datetime.now())
-            con_g = st.text_input("Concepto (Ej: Tanqueo full, Mercado Éxito)")
-            mon_g = st.number_input("Monto (COP)", min_value=0.0, step=1000.0)
-            pag_g = st.selectbox("¿Quién realizó el movimiento?", ["Leonardo", "Cata"])
-            
-            # Variables de gasolina ocultas por defecto
-            km_g, gal_g = 0, 0
-            
-            # Si se selecciona carro, mostramos los campos extra
-            if cat_g == "Carro - Gastos":
-                st.info("⛽ Datos de combustible detectados:")
-                c_km, c_gl = st.columns(2)
-                km_g = c_km.number_input("Kilometraje Actual", min_value=0.0, step=1.0)
-                gal_g = c_gl.number_input("Cantidad de Galones", min_value=0.0, step=0.1)
-
-            if st.form_submit_button("💾 Guardar Registro"):
-                if con_g and mon_g > 0:
-                    conn = st.connection("gsheets", type=GSheetsConnection)
-                    nueva_f = pd.DataFrame([{"Fecha": fecha_g.strftime("%d/%m/%Y"), "Concepto": con_g, "Monto": mon_g, "Pagador": pag_g, "Categoría": cat_g, "KM": km_g, "Galones": gal_g}])
-                    conn.update(data=pd.concat([conn.read(ttl="0"), nueva_f], ignore_index=True))
-                    enviar_notificacion(f"✅ *Nuevo Registro*\n👤 {pag_g}\n📝 {con_g}\n💵 ${mon_g:,.0f} COP")
-                    st.rerun()
-
-with col_reg2:
-    with st.expander("🤝 REGISTRAR ABONO (Pagar deudas)", expanded=False):
-        with st.form("nuevo_abono", clear_on_submit=True):
-            fecha_a = st.date_input("Fecha Abono", datetime.now())
-            emisor = st.selectbox("¿Quién entrega el dinero?", ["Cata", "Leonardo"])
-            receptor = "Leonardo" if emisor == "Cata" else "Cata"
-            monto_a = st.number_input("Monto del Abono (COP)", min_value=0.0, step=1000.0)
-            
-            if st.form_submit_button("🤝 Confirmar Abono"):
-                if monto_a > 0:
-                    conn = st.connection("gsheets", type=GSheetsConnection)
-                    nueva_f = pd.DataFrame([{"Fecha": fecha_a.strftime("%d/%m/%Y"), "Concepto": f"Abono a {receptor}", "Monto": monto_a, "Pagador": emisor, "Categoría": "Abono a Deuda", "KM": 0, "Galones": 0}])
-                    conn.update(data=pd.concat([conn.read(ttl="0"), nueva_f], ignore_index=True))
-                    enviar_notificacion(f"🤝 *Abono Registrado*\n👤 {emisor} ➡️ {receptor}\n💵 ${monto_a:,.0f} COP")
-                    st.rerun()
-
-st.divider()
-
-# --- 4. FILTROS DE TIEMPO (Solo para reportes mensuales) ---
-meses_dict = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
-df_clean = df_v.dropna(subset=['Fecha'])
-anhos = sorted(df_clean['Fecha'].dt.year.unique(), reverse=True)
-if datetime.now().year not in anhos: anhos.insert(0, datetime.now().year)
-anho_s = st.sidebar.selectbox("Año de reporte", anhos)
-mes_s_n = st.sidebar.selectbox("Mes de reporte", list(meses_dict.values()), index=datetime.now().month-1)
-mes_s_num = [k for k, v in meses_dict.items() if v == mes_s_n][0]
-
-# --- 5. LÓGICA DE BALANCE ACUMULADO ---
 def calcular_detalle_balance(dataframe):
     cat_hogar = [c for c in CATEGORIAS_GASTOS if c not in ["Carro - Ingresos", "Carro - Gastos", "Préstamo Personal", "Otro"]]
-    # Hogar (50/50)
     df_h = dataframe[dataframe['Categoría'].isin(cat_hogar)]
     t_leo_h = df_h[df_h['Pagador'] == 'Leonardo']['Monto'].sum()
     t_cata_h = df_h[df_h['Pagador'].isin(['Cata', 'Esposa'])]['Monto'].sum()
-    # Préstamos (100%)
+    dh = (t_leo_h - t_cata_h) / 2
+    
     p_leo = dataframe[(dataframe['Categoría'] == "Préstamo Personal") & (dataframe['Pagador'] == "Leonardo")]['Monto'].sum()
     p_cata = dataframe[(dataframe['Categoría'] == "Préstamo Personal") & (dataframe['Pagador'] == "Cata")]['Monto'].sum()
-    # Abonos
+    dp = p_leo - p_cata
+    
     a_cata = dataframe[(dataframe['Categoría'] == "Abono a Deuda") & (dataframe['Pagador'] == "Cata")]['Monto'].sum()
     a_leo = dataframe[(dataframe['Categoría'] == "Abono a Deuda") & (dataframe['Pagador'] == "Leonardo")]['Monto'].sum()
-    
-    dh = (t_leo_h - t_cata_h) / 2
-    dp = p_leo - p_cata
     aj = a_leo - a_cata
+    
     return dh, dp, aj, (t_leo_h, t_cata_h, p_leo, p_cata, a_leo, a_cata)
 
-# Cálculo de Saldo Anterior y Total
-fecha_corte = datetime(anho_s, mes_s_num, 1)
-df_ant = df_clean[df_clean['Fecha'] < fecha_corte]
-dh_a, dp_a, aj_a, _ = calcular_detalle_balance(df_ant)
-saldo_anterior = dh_a + dp_a + aj_a
+# Carga de datos global
+df_v = cargar_datos()
 
-dh_t, dp_t, aj_t, raw = calcular_detalle_balance(df_clean)
-saldo_total = dh_t + dp_t + aj_t
+# --- 3. NAVEGACIÓN LATERAL ---
+with st.sidebar:
+    st.image("https://img.icons8.com/clouds/200/home-automation.png", width=100)
+    st.title("Menú Principal")
+    modulo = st.radio(
+        "Ir a:",
+        ["🏠 Inicio", "➕ Registrar Gasto/Ingreso", "🤝 Registrar Abono", "📊 Reportes Mensuales", "📖 Historial y Edición"]
+    )
+    st.divider()
+    st.info("💡 Consejo: Revisa tus presupuestos en la sección de Reportes.")
 
-# --- 6. SECCIÓN DE CUENTAS CLARAS ---
-st.header("👥 Cuentas Claras")
-c1, c2 = st.columns(2)
-c1.metric("Viene del pasado", f"${abs(saldo_anterior):,.0f}", help="Deuda acumulada antes del mes seleccionado")
-c2.metric("SALDO TOTAL HOY", f"${abs(saldo_total):,.0f}", delta=f"{saldo_total - saldo_anterior:,.0f} este mes", delta_color="inverse")
+# --- 4. LÓGICA DE MÓDULOS ---
 
-if saldo_total > 0:
-    st.info(f"💡 **Cata debe a Leonardo: ${saldo_total:,.0f} COP**")
-elif saldo_total < 0:
-    st.info(f"💡 **Leonardo debe a Cata: ${abs(saldo_total):,.0f} COP**")
-else:
-    st.success("✅ **¡Están totalmente a mano!**")
-
-with st.expander("🔍 VER DETALLE DE LA DEUDA (Historial completo)"):
-    d1, d2, d3 = st.columns(3)
-    d1.write(f"🏠 **Hogar (50%):**\n${abs(dh_t):,.0f}")
-    d2.write(f"💸 **Préstamos (100%):**\n${abs(dp_t):,.0f}")
-    d3.write(f"🤝 **Abonos hechos:**\n${abs(raw[4] + raw[5]):,.0f}")
+if modulo == "🏠 Inicio":
+    st.title("🏠 Finanzas Hogar & 🚗 Negocio Carro")
     
-    st.caption("Últimos movimientos de Préstamos y Abonos:")
-    df_h_tabs = df_clean[df_clean['Categoría'].isin(["Préstamo Personal", "Abono a Deuda"])].tail(10).iloc[::-1]
-    if not df_h_tabs.empty:
-        df_h_tabs['Fecha'] = df_h_tabs['Fecha'].dt.strftime('%d/%m/%Y')
-        st.dataframe(df_h_tabs[['Fecha', 'Pagador', 'Categoría', 'Concepto', 'Monto']], use_container_width=True, hide_index=True)
+    # Cálculos globales para el Inicio
+    dh_t, dp_t, aj_t, raw = calcular_detalle_balance(df_v)
+    saldo_total = dh_t + dp_t + aj_t
+    
+    st.subheader("Estado Actual de Cuentas")
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.metric("Deuda por Hogar", f"${abs(dh_t):,.0f}")
+    with c2:
+        st.metric("Deuda por Préstamos", f"${abs(dp_t):,.0f}")
+    with c3:
+        st.metric("Abonos Realizados", f"${abs(raw[4] + raw[5]):,.0f}")
+    
+    if saldo_total > 0:
+        st.warning(f"💡 **Cata debe a Leonardo: ${saldo_total:,.0f} COP**")
+    elif saldo_total < 0:
+        st.warning(f"💡 **Leonardo debe a Cata: ${abs(saldo_total):,.0f} COP**")
+    else:
+        st.success("✅ **¡Están totalmente a mano!**")
 
-st.divider()
+elif modulo == "➕ Registrar Gasto/Ingreso":
+    st.header("➕ Registrar Nuevo Movimiento")
+    cat_g = st.selectbox("Categoría", CATEGORIAS_GASTOS)
+    
+    with st.form("form_gasto", clear_on_submit=True):
+        fecha_g = st.date_input("Fecha", datetime.now())
+        con_g = st.text_input("Concepto")
+        mon_g = st.number_input("Monto (COP)", min_value=0.0, step=1000.0)
+        pag_g = st.selectbox("Pagador", ["Leonardo", "Cata"])
+        
+        km_g, gal_g = 0, 0
+        if cat_g == "Carro - Gastos":
+            st.divider()
+            st.caption("⛽ Información de combustible")
+            ckm, cgl = st.columns(2)
+            km_g = ckm.number_input("Kilometraje", min_value=0.0)
+            gal_g = cgl.number_input("Galones", min_value=0.0)
+            
+        if st.form_submit_button("💾 Guardar en la Nube"):
+            if con_g and mon_g > 0:
+                conn = st.connection("gsheets", type=GSheetsConnection)
+                nueva_f = pd.DataFrame([{"Fecha": fecha_g.strftime("%d/%m/%Y"), "Concepto": con_g, "Monto": mon_g, "Pagador": pag_g, "Categoría": cat_g, "KM": km_g, "Galones": gal_g}])
+                conn.update(data=pd.concat([conn.read(ttl="0"), nueva_f], ignore_index=True))
+                enviar_notificacion(f"✅ *Nuevo Registro*\n👤 {pag_g}\n📝 {con_g}\n💵 ${mon_g:,.0f}")
+                st.success("¡Registro guardado con éxito!")
+                st.rerun()
 
-# --- 7. REPORTE MENSUAL (CARRO Y METAS) ---
-df_mes = df_clean[(df_clean['Fecha'].dt.month == mes_s_num) & (df_clean['Fecha'].dt.year == anho_s)]
-st.header(f"📊 Reporte de {mes_s_n} {anho_s}")
+elif modulo == "🤝 Registrar Abono":
+    st.header("🤝 Registrar Abono entre Pareja")
+    with st.form("form_abono", clear_on_submit=True):
+        fecha_a = st.date_input("Fecha", datetime.now())
+        emisor = st.selectbox("¿Quién entrega el dinero?", ["Cata", "Leonardo"])
+        receptor = "Leonardo" if emisor == "Cata" else "Cata"
+        monto_a = st.number_input("Monto (COP)", min_value=0.0, step=1000.0)
+        
+        if st.form_submit_button("🤝 Confirmar Entrega de Dinero"):
+            if monto_a > 0:
+                conn = st.connection("gsheets", type=GSheetsConnection)
+                nueva_f = pd.DataFrame([{"Fecha": fecha_a.strftime("%d/%m/%Y"), "Concepto": f"Abono a {receptor}", "Monto": monto_a, "Pagador": emisor, "Categoría": "Abono a Deuda", "KM": 0, "Galones": 0}])
+                conn.update(data=pd.concat([conn.read(ttl="0"), nueva_f], ignore_index=True))
+                enviar_notificacion(f"🤝 *Abono Registrado*\n👤 {emisor} ➡️ {receptor}\n💵 ${monto_a:,.0f}")
+                st.success(f"Abono de {emisor} registrado correctamente.")
+                st.rerun()
 
-col_car, col_met = st.columns([1, 2])
+elif modulo == "📊 Reportes Mensuales":
+    st.header("📊 Análisis del Mes")
+    
+    # Filtros de mes/año
+    meses_dict = {1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun", 7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"}
+    df_cl = df_v.dropna(subset=['Fecha'])
+    anho_s = st.selectbox("Año", sorted(df_cl['Fecha'].dt.year.unique(), reverse=True))
+    mes_s_n = st.selectbox("Mes", list(meses_dict.values()), index=datetime.now().month-1)
+    mes_s_num = [k for k, v in meses_dict.items() if v == mes_s_n][0]
+    
+    df_mes = df_cl[(df_cl['Fecha'].dt.month == mes_s_num) & (df_cl['Fecha'].dt.year == anho_s)]
+    
+    t1, t2 = st.tabs(["🚗 Negocio Carro", "🎯 Presupuestos Hogar"])
+    
+    with t1:
+        df_car = df_mes[df_mes['Categoría'].isin(["Carro - Ingresos", "Carro - Gastos"])]
+        ing = df_car[df_car['Categoría'] == "Carro - Ingresos"]['Monto'].sum()
+        gas = df_car[df_car['Categoría'] == "Carro - Gastos"]['Monto'].sum()
+        st.metric("Utilidad del Negocio", f"${ing-gas:,.0f}")
+        st.write(f"Ingresos: ${ing:,.0f} | Gastos: ${gas:,.0f}")
 
-with col_car:
-    st.subheader("🚗 Negocio Carro")
-    df_c_m = df_mes[df_mes['Categoría'].isin(["Carro - Ingresos", "Carro - Gastos"])]
-    ing = df_c_m[df_c_m['Categoría'] == "Carro - Ingresos"]['Monto'].sum()
-    gas = df_c_m[df_c_m['Categoría'] == "Carro - Gastos"]['Monto'].sum()
-    st.metric("Utilidad del Mes", f"${ing-gas:,.0f}")
-    st.caption(f"Ingresos: ${ing:,.0f} | Gastos: ${gas:,.0f}")
-
-with col_met:
-    st.subheader("🎯 Presupuestos Hogar")
-    cp = st.columns(len(PRESUPUESTOS_FAMILIARES))
-    for i, (cat, lim) in enumerate(PRESUPUESTOS_FAMILIARES.items()):
-        gast = df_mes[df_mes['Categoría'] == cat]['Monto'].sum()
-        with cp[i]:
+    with t2:
+        for cat, lim in PRESUPUESTOS_FAMILIARES.items():
+            gast = df_mes[df_mes['Categoría'] == cat]['Monto'].sum()
             st.write(f"**{cat}**")
             st.progress(min(gast/lim, 1.0))
-            st.caption(f"${gast:,.0f} / ${lim:,.0f}")
+            st.caption(f"${gast:,.0f} de ${lim:,.0f}")
 
-st.plotly_chart(px.pie(df_mes[~df_mes['Categoría'].isin(["Abono a Deuda", "Préstamo Personal", "Carro - Ingresos", "Carro - Gastos"])], 
-                       values='Monto', names='Categoría', hole=0.5, title="Distribución de Gastos Reales"), use_container_width=True)
+elif modulo == "📖 Historial y Edición":
+    st.header("📖 Historial de Movimientos")
+    
+    st.subheader("Últimos 5 registros")
+    u5 = df_v.tail(5).iloc[::-1].copy()
+    u5['Fecha'] = u5['Fecha'].dt.strftime('%d/%m/%Y')
+    st.dataframe(u5, use_container_width=True, hide_index=True)
+    
+    st.divider()
+    st.subheader("Eliminar Registro")
+    st.warning("⚠️ Esta acción borrará el último registro del archivo de Google Sheets.")
+    if st.checkbox("Confirmar que deseo eliminar el último registro"):
+        if st.button("🗑️ Eliminar Definitivamente"):
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            df_actual = conn.read(ttl="0")
+            if not df_actual.empty:
+                conn.update(data=df_actual.drop(df_actual.index[-1]))
+                enviar_notificacion("❌ *Gasto Eliminado*")
+                st.rerun()
+
+    with st.expander("📂 Ver todo el historial"):
+        st.dataframe(df_v, use_container_width=True)
